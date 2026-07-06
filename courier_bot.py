@@ -39,13 +39,15 @@ async def add_courier(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
         return
     try:
-        parts = msg.text.split(maxsplit=3)
+        parts = msg.text.split()
         user_id = int(parts[1])
-        name = parts[2]
-        iban = parts[3] if len(parts) > 3 else ""
+        iban = parts[-1]  # آخر كلمة = الإيبان
+        full_name = " ".join(parts[2:-1])  # كل اللي في الوسط = الاسم
+        
+        if not full_name:
+            full_name = "غير محدد"
         
         async with aiosqlite.connect("couriers.db") as db:
-            # Check if exists
             async with db.execute("SELECT user_id FROM couriers WHERE user_id = ?", (user_id,)) as cursor:
                 if await cursor.fetchone():
                     return await msg.answer("⚠️ المندوب موجود مسبقاً.")
@@ -53,11 +55,12 @@ async def add_courier(msg: Message):
             await db.execute("""INSERT INTO couriers 
                 (user_id, full_name, iban, added_at) 
                 VALUES (?, ?, ?, ?)""",
-                (user_id, name, iban, datetime.now().isoformat()))
+                (user_id, full_name, iban, datetime.now().isoformat()))
             await db.commit()
-        await msg.answer(f"✅ تم إضافة {name} (ID: {user_id})")
+        
+        await msg.answer(f"✅ تم إضافة {full_name} (ID: {user_id})\nIBAN: {iban}")
     except:
-        await msg.answer("الصيغة: /add ID الاسم الايبان")
+        await msg.answer("الصيغة:\n/add ID الاسم الكامل الايبان\nمثال:\n/add 123456789 محمد علي SA89723743789234897349782")
 
 @dp.message(Command("list"))
 async def list_couriers(msg: Message):
@@ -68,7 +71,7 @@ async def list_couriers(msg: Message):
             rows = await cursor.fetchall()
     if not rows:
         return await msg.answer("لا يوجد مناديب.")
-    text = "📋 المناديب (مرتبة حسب التاريخ):\n\n"
+    text = "📋 المناديب:\n\n"
     for r in rows:
         text += f"• {r[1]} (ID: {r[0]})\n  IBAN: {r[2] or 'غير محدد'}\n\n"
     await msg.answer(text)
