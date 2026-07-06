@@ -71,11 +71,17 @@ async def list_couriers(msg: Message):
             rows = await cursor.fetchall()
     if not rows:
         return await msg.answer("لا يوجد مناديب.")
-    text = "📋 المناديب:\n\n"
+    
+    text = "📋 **المناديب المسجلين:**\n\n"
     for r in rows:
-        text += f"• {r[1]} (ID: {r[0]})\n  IBAN: {r[2] or 'غير محدد'}\n\n"
-    await msg.answer(text)
-
+        text += f"• {r[1]} (ID: {r[0]})\n"
+        if r[2]:
+            text += f"  IBAN: `{r[2]}`\n\n"   # ← قابل للنسخ
+        else:
+            text += "  IBAN: غير محدد\n\n"
+    
+    await msg.answer(text, parse_mode="Markdown")
+    
 @dp.message(Command("delete"))
 async def delete_courier(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
