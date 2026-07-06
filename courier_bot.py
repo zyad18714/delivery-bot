@@ -1,18 +1,17 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command 
+from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import aiosqlite
 import os
 from dotenv import load_dotenv
+import requests
 from datetime import datetime
-import requests  # للتواصل مع بوت الطلبات
 
 load_dotenv()
 TOKEN = os.getenv("COURIER_BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-ORDERS_BOT_URL = os.getenv("ORDERS_BOT_URL")  # رابط webhook بوت الطلبات
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "0").split(",") if x.strip()]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -20,43 +19,52 @@ dp = Dispatcher()
 async def init_db():
     async with aiosqlite.connect("couriers.db") as db:
         await db.executescript("""
-            CREATE TABLE IF NOT EXISTS couriers (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT);
-            CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY, customer_id INTEGER, details TEXT, fee TEXT, pickup TEXT, dropoff TEXT, status TEXT DEFAULT 'pending');
+            CREATE TABLE IF NOT EXISTS couriers (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                full_name TEXT,
+                approved INTEGER DEFAULT 1,
+                added_at TEXT
+            );
         """)
         await db.commit()
 
-@dp.message(Command("start"))
-async def start(msg: Message):
-    user_id = msg.from_user.id
-    async with aiosqlite.connect("couriers.db") as db:
-        await db.execute("INSERT OR IGNORE INTO couriers VALUES (?, ?, ?)", 
-                        (user_id, msg.from_user.username, msg.from_user.full_name))
-        await db.commit()
-    await msg.answer("✅ تم تسجيلك كمندوب.")
-
-@dp.callback_query(F.data.startswith("accept_"))
-async def accept_order(callback: CallbackQuery):
-    order_id = callback.data.split("_")[1]
-    user_id = callback.from_user.id
-    username = callback.from_user.username or str(user_id)
+# أمر الأدمن لإضافة مندوب
+@dp.message(Command("add"))
+async def add_courier(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return await msg.answer("للأدمن فقط.")
     
-    async with aiosqlite.connect("couriers.db") as db:
-        async with db.execute("SELECT status FROM orders WHERE order_id = ?", (order_id,)) as cursor:
-            result = await cursor.fetchone()
-            if result and result[0] != 'pending':
-                return await callback.answer("❌ الطلب تم أخذه", show_alert=True)
-        
-        await db.execute("UPDATE orders SET status = 'taken', taken_by = ? WHERE order_id = ?", (user_id, order_id))
-        await db.commit()
-    
-    await callback.message.edit_text(callback.message.text + f"\n\n✅ **أخذه:** @{username}")
-    await callback.answer("🎉 أنت المسؤول عن الطلب!", show_alert=True)
-    
-    # إشعار بوت الطلبات
     try:
-        requests.post(f"{ORDERS_BOT_URL}/order_taken", json={"order_id": order_id, "courier": username})
+        parts = msg.text.split(maxsplit=2)
+        user_id = int(parts[1])
+        name = parts[2] if len(parts) > 2 else "Unknown"
+        
+        async with aiosqlite.connect("couriers.db") as db:
+            await db.execute("""INSERT OR REPLACE INTO couriers 
+                (user_id, username, full_name, approved, added_at) 
+                VALUES (?, ?, ?, 1, ?)""",
+                (user_id, None, name, datetime.now().isoformat()))
+            await db.commit()
+        
+        await msg.answer(f"✅ تم إضافة المندوب: {user_id} ({name})")
+        try:
+            await bot.send_message(user_id, "🎉 تم تفعيل حسابك كمندوب!\nستصلك الطلبات قريباً.")
+        except:
+            pass
     except:
-        pass
+        await msg.answer("الصيغة: /add USER_ID الاسم")
+
+# أمر عرض المناديب
+@dp.message(Command("list"))
+async def list_couriers(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    async with aiosqlite.connect("couriers.db") as db:
+        async with db.execute("SELECT user_id, full_name FROM couriers") as cursor:
+            rows = await cursor.fetchall()
+    text = "المناديب المسجلين:\n" + "\n".join([f"{r[0]} - {r[1]}" for r in rows])
+    await msg.answer(text or "لا يوجد مناديب بعد.")
 
 async def main():
     await init_db()
