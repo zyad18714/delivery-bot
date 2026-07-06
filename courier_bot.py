@@ -20,10 +20,8 @@ async def init_db():
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS couriers (
                 user_id INTEGER PRIMARY KEY,
-                username TEXT,
                 full_name TEXT,
                 iban TEXT,
-                approved INTEGER DEFAULT 1,
                 added_at TEXT
             );
             CREATE TABLE IF NOT EXISTS earnings (
@@ -36,7 +34,6 @@ async def init_db():
         """)
         await db.commit()
 
-# إضافة مندوب مع إيبان
 @dp.message(Command("add"))
 async def add_courier(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
@@ -48,45 +45,46 @@ async def add_courier(msg: Message):
         iban = parts[3] if len(parts) > 3 else ""
         
         async with aiosqlite.connect("couriers.db") as db:
-            await db.execute("""INSERT OR REPLACE INTO couriers 
-                (user_id, username, full_name, iban, approved, added_at) 
-                VALUES (?, ?, ?, ?, 1, ?)""",
-                (user_id, None, name, iban, datetime.now().isoformat()))
+            # Check if exists
+            async with db.execute("SELECT user_id FROM couriers WHERE user_id = ?", (user_id,)) as cursor:
+                if await cursor.fetchone():
+                    return await msg.answer("⚠️ المندوب موجود مسبقاً.")
+            
+            await db.execute("""INSERT INTO couriers 
+                (user_id, full_name, iban, added_at) 
+                VALUES (?, ?, ?, ?)""",
+                (user_id, name, iban, datetime.now().isoformat()))
             await db.commit()
         await msg.answer(f"✅ تم إضافة {name} (ID: {user_id})")
     except:
         await msg.answer("الصيغة: /add ID الاسم الايبان")
 
-# قائمة المناديب
 @dp.message(Command("list"))
 async def list_couriers(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
         return
     async with aiosqlite.connect("couriers.db") as db:
-        async with db.execute("SELECT user_id, full_name, iban FROM couriers") as cursor:
+        async with db.execute("SELECT user_id, full_name, iban FROM couriers ORDER BY added_at DESC") as cursor:
             rows = await cursor.fetchall()
-    text = "المناديب:\n" + "\n".join([f"• {r[1]} ({r[0]}) | IBAN: {r[2] or 'غير محدد'}" for r in rows])
-    await msg.answer(text or "لا يوجد مناديب")
+    if not rows:
+        return await msg.answer("لا يوجد مناديب.")
+    text = "📋 المناديب (مرتبة حسب التاريخ):\n\n"
+    for r in rows:
+        text += f"• {r[1]} (ID: {r[0]})\n  IBAN: {r[2] or 'غير محدد'}\n\n"
+    await msg.answer(text)
 
-# تقرير أسبوعي
-@dp.message(Command("weekly"))
-async def weekly_report(msg: Message):
+@dp.message(Command("delete"))
+async def delete_courier(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
         return
-    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
-    async with aiosqlite.connect("couriers.db") as db:
-        async with db.execute("""
-            SELECT c.full_name, c.iban, SUM(e.amount) as total
-            FROM earnings e
-            JOIN couriers c ON e.courier_id = c.user_id
-            WHERE e.date > ?
-            GROUP BY c.user_id
-        """, (week_ago,)) as cursor:
-            rows = await cursor.fetchall()
-    text = "📊 تقرير أسبوعي:\n\n"
-    for r in rows:
-        text += f"• {r[0]}\n  المبلغ: {r[2]:.2f} ريال\n  IBAN: {r[1] or 'غير محدد'}\n\n"
-    await msg.answer(text or "لا يوجد أرباح هذا الأسبوع")
+    try:
+        user_id = int(msg.text.split()[1])
+        async with aiosqlite.connect("couriers.db") as db:
+            await db.execute("DELETE FROM couriers WHERE user_id = ?", (user_id,))
+            await db.commit()
+        await msg.answer(f"🗑️ تم حذف المندوب {user_id}")
+    except:
+        await msg.answer("الصيغة: /delete ID")
 
 async def main():
     await init_db()
